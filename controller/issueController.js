@@ -4,11 +4,12 @@ export class IssueController {
   // Create a new civic issue
   static createIssue = async (req, res) => {
     try {
-      const { title, description, image, categoryId, importanceRating, userId } = req.body;
+      const { title, description, image, categoryId, importanceRating } = req.body;
+      const userId = req.user.sub; // Get user ID from authenticated token
 
-      if (!title || !description || !categoryId || !userId) {
+      if (!title || !description || !categoryId) {
         return res.status(400).json({
-          message: "Title, description, categoryId, and userId are required",
+          message: "Title, description, and categoryId are required",
         });
       }
 
@@ -20,7 +21,7 @@ export class IssueController {
         });
       }
 
-      // Verify user exists
+      // Verify user exists (should always exist since they're authenticated)
       const user = await prisma.user.findUnique({
         where: { id: userId },
       });
@@ -69,20 +70,20 @@ export class IssueController {
     }
   };
 
-  // Get all issues with optional filters
+  // Get all issues with optional filters (users can only see their own issues)
   static getIssues = async (req, res) => {
     try {
-      const { status, categoryId, userId, sortBy = "createdAt", order = "desc" } = req.query;
+      const { status, categoryId, sortBy = "createdAt", order = "desc" } = req.query;
+      const userId = req.user.sub; // Get user ID from authenticated token
 
-      const where = {};
+      const where = {
+        userId, // Users can only see their own issues
+      };
       if (status !== undefined) {
         where.status = parseInt(status);
       }
       if (categoryId) {
         where.categoryId = categoryId;
-      }
-      if (userId) {
-        where.userId = userId;
       }
 
       const issues = await prisma.issue.findMany({

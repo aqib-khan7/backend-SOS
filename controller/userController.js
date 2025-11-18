@@ -1,54 +1,15 @@
 import twilio from "twilio";
 import jwt from "jsonwebtoken";
-import crypto from "node:crypto";
 import prisma from "../lib/prisma.js";
 
-// the user will be authenticated using the twillo thing
+// the user will be authenticated using the twilio verify API
 
 const twilioClient =
   process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN
     ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN)
     : null;
 
-const OTP_TTL_MS =
-  parseInt(process.env.PHONE_LOGIN_OTP_TTL_MS ?? "300000", 10) || 300000;
-
-const hashOtp = (otp) =>
-  crypto.createHash("sha256").update(otp).digest("hex").toString();
-
-const generateOtp = () =>
-  (Math.floor(100000 + Math.random() * 900000)).toString();
-
-const sendOtpSms = async (phone, otp) => {
-  const body = `Your login code is ${otp}. It expires in ${Math.floor(
-    OTP_TTL_MS / 60000
-  )} minutes.`;
-
-  if (
-    twilioClient &&
-    (process.env.TWILIO_MESSAGING_SERVICE_SID || process.env.TWILIO_PHONE_NUMBER)
-  ) {
-    const payload = {
-      to: phone,
-      body,
-    };
-
-    if (process.env.TWILIO_MESSAGING_SERVICE_SID) {
-      payload.messagingServiceSid = process.env.TWILIO_MESSAGING_SERVICE_SID;
-    } else {
-      payload.from = process.env.TWILIO_PHONE_NUMBER;
-    }
-
-    await twilioClient.messages.create(payload);
-  } else {
-    console.warn(
-      "[Auth] Twilio credentials missing. OTP:",
-      otp,
-      "Phone:",
-      phone
-    );
-  }
-};
+const TWILIO_VERIFY_SERVICE_SID = process.env.TWILIO_VERIFY_SERVICE_SID;
 
 export class UserController {
   static requestLoginOtp = async (req, res) => {
@@ -59,25 +20,28 @@ export class UserController {
         return res.status(400).json({ message: "Phone number is required." });
       }
 
-      const otp = generateOtp();
-      const hashed = hashOtp(otp);
-      const expiresAt = new Date(Date.now() + OTP_TTL_MS);
+      if (!twilioClient || !TWILIO_VERIFY_SERVICE_SID) {
+        console.error("[Auth] Twilio credentials missing");
+        return res.status(500).json({ message: "SMS service not configured." });
+      }
 
-      await prisma.phoneOtp.create({
-        data: {
-          phone,
-          code: hashed,
-          expiresAt,
-        },
-      });
-
-      await sendOtpSms(phone, otp);
+      // Send OTP using Twilio Verify API
+      const verification = await twilioClient.verify.v2
+        .services(TWILIO_VERIFY_SERVICE_SID)
+        .verifications.create({
+          to: phone,
+          channel: "sms",
+        });
 
       return res.status(200).json({
-        message: "OTP sent. It is valid for the next few minutes.",
+        message: "OTP sent successfully. Please check your phone.",
+        sid: verification.sid,
       });
     } catch (error) {
       console.error("[Auth] requestLoginOtp failed:", error);
+      if (error.code === 60200) {
+        return res.status(400).json({ message: "Invalid phone number format." });
+      }
       return res.status(500).json({ message: "Unable to send OTP right now." });
     }
   };
@@ -92,44 +56,34 @@ export class UserController {
           .json({ message: "Phone number and OTP are required." });
       }
 
-      const existingOtp = await prisma.phoneOtp.findFirst({
-        where: {
-          phone,
-          consumed: false,
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
-
-      if (!existingOtp) {
-        return res.status(400).json({ message: "OTP not found. Request a new one." });
+      if (!twilioClient || !TWILIO_VERIFY_SERVICE_SID) {
+        console.error("[Auth] Twilio credentials missing");
+        return res.status(500).json({ message: "SMS service not configured." });
       }
 
-      if (existingOtp.expiresAt < new Date()) {
-        await prisma.phoneOtp.update({
-          where: { id: existingOtp.id },
-          data: { consumed: true },
+      // Verify OTP using Twilio Verify API
+      const verificationCheck = await twilioClient.verify.v2
+        .services(TWILIO_VERIFY_SERVICE_SID)
+        .verificationChecks.create({
+          to: phone,
+          code: otp,
         });
-        return res.status(400).json({ message: "OTP expired. Request a new one." });
+
+      if (verificationCheck.status !== "approved") {
+        return res.status(401).json({ message: "Invalid or expired OTP." });
       }
 
-      if (hashOtp(otp) !== existingOtp.code) {
-        return res.status(401).json({ message: "Invalid OTP." });
-      }
-
-      await prisma.phoneOtp.update({
-        where: { id: existingOtp.id },
-        data: { consumed: true },
+      // Find or create user
+      let user = await prisma.user.findUnique({
+        where: { number: phone },
       });
 
-      const user = await prisma.user.findUnique({
-        where: { phone },
-      });
-
+      // Auto-register user if they don't exist
       if (!user) {
-        return res.status(404).json({
-          message: "User not found. Please register before logging in.",
+        user = await prisma.user.create({
+          data: {
+            number: phone,
+          },
         });
       }
 
@@ -138,28 +92,33 @@ export class UserController {
         return res.status(500).json({ message: "Server misconfiguration." });
       }
 
+      // Generate JWT token after successful verification with user role
       const token = jwt.sign(
         {
           sub: user.id,
-          phone: user.phone,
-          role: user.role,
+          number: user.number,
+          role: "user",
         },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN ?? "12h" }
       );
 
+      // Return JWT token and user info
       return res.status(200).json({
-        message: "Login successful.",
-        token,
+        success: true,
+        message: "Login successful. OTP verified.",
+        token, // JWT token with user role
         user: {
           id: user.id,
-          name: user.name,
-          phone: user.phone,
-          role: user.role,
+          number: user.number,
+          role: "user",
         },
       });
     } catch (error) {
       console.error("[Auth] verifyLoginOtp failed:", error);
+      if (error.code === 20404) {
+        return res.status(400).json({ message: "OTP not found. Request a new one." });
+      }
       return res
         .status(500)
         .json({ message: "Unable to verify OTP right now." });
