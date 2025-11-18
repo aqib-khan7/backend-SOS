@@ -1,12 +1,15 @@
 import prisma from "../lib/prisma.js";
 import jwt from "jsonwebtoken";
+import { calculatePriority, getMaxRepostCount } from "../utils/priority.js";
 
 export class AdminController {
   // now we need to authenticate the admin using the email and password itself
   static login = async (req, res) => {
     try {
+    console.log("this has been started" , req.body)
       const { email, password } = req.body;
-      const admin = await prisma.admin.findUnique({ where: { email } });
+      const admin = await prisma.admin.findUnique({ where: { email : email } });
+      console.log("admin is this" , admin)
       if (!admin) {
         return res.status(401).json({ message: "Admin not found" });
       }
@@ -42,7 +45,7 @@ export class AdminController {
       });
     } catch (error) {
       console.error("[Admin] login failed:", error);
-      return res.status(500).json({ message: "Login failed" });
+      return res.status(500).json({ message: "Login failed" , error : error});
     }
   };
 
@@ -82,12 +85,40 @@ export class AdminController {
               number: true,
             },
           },
+          comments: {
+            include: {
+              admin: {
+                select: {
+                  id: true,
+                  email: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "asc",
+            },
+          },
+          reposts: {
+            select: {
+              id: true,
+              userId: true,
+            },
+          },
         },
       });
 
+      // Calculate priority
+      const maxReposts = await getMaxRepostCount(prisma);
+      const repostCount = updatedIssue.reposts.length;
+      const priority = calculatePriority(updatedIssue.importanceRating, repostCount, maxReposts);
+
       return res.status(200).json({
         message: "Issue status updated successfully",
-        issue: updatedIssue,
+        issue: {
+          ...updatedIssue,
+          repostCount,
+          priority,
+        },
       });
     } catch (error) {
       console.error("[Admin] updateIssueStatus failed:", error);
@@ -118,16 +149,59 @@ export class AdminController {
               number: true,
             },
           },
+          comments: {
+            include: {
+              admin: {
+                select: {
+                  id: true,
+                  email: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "asc",
+            },
+          },
+          reposts: {
+            select: {
+              id: true,
+              userId: true,
+            },
+          },
         },
         orderBy: {
           [sortBy]: order,
         },
       });
 
+      // Get max repost count for normalization
+      const maxReposts = await getMaxRepostCount(prisma);
+
+      // Calculate priority for each issue
+      const issuesWithPriority = issues.map((issue) => {
+        const repostCount = issue.reposts.length;
+        const priority = calculatePriority(issue.importanceRating, repostCount, maxReposts);
+        
+        return {
+          ...issue,
+          repostCount,
+          priority,
+        };
+      });
+
+      // Sort by priority if requested
+      if (sortBy === "priority") {
+        issuesWithPriority.sort((a, b) => {
+          return order === "desc"
+            ? b.priority.totalPriority - a.priority.totalPriority
+            : a.priority.totalPriority - b.priority.totalPriority;
+        });
+      }
+
       return res.status(200).json({
         message: "Issues retrieved successfully",
-        issues,
-        count: issues.length,
+        issues: issuesWithPriority,
+        count: issuesWithPriority.length,
       });
     } catch (error) {
       console.error("[Admin] getIssues failed:", error);
@@ -150,6 +224,25 @@ export class AdminController {
               number: true,
             },
           },
+          comments: {
+            include: {
+              admin: {
+                select: {
+                  id: true,
+                  email: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "asc",
+            },
+          },
+          reposts: {
+            select: {
+              id: true,
+              userId: true,
+            },
+          },
         },
       });
 
@@ -157,9 +250,18 @@ export class AdminController {
         return res.status(404).json({ message: "Issue not found" });
       }
 
+      // Calculate priority
+      const maxReposts = await getMaxRepostCount(prisma);
+      const repostCount = issue.reposts.length;
+      const priority = calculatePriority(issue.importanceRating, repostCount, maxReposts);
+
       return res.status(200).json({
         message: "Issue retrieved successfully",
-        issue,
+        issue: {
+          ...issue,
+          repostCount,
+          priority,
+        },
       });
     } catch (error) {
       console.error("[Admin] getIssueById failed:", error);

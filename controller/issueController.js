@@ -1,4 +1,5 @@
 import prisma from "../lib/prisma.js";
+import { calculatePriority, getMaxRepostCount } from "../utils/priority.js";
 
 export class IssueController {
   // Create a new civic issue
@@ -57,12 +58,40 @@ export class IssueController {
               number: true,
             },
           },
+          comments: {
+            include: {
+              admin: {
+                select: {
+                  id: true,
+                  email: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "asc",
+            },
+          },
+          reposts: {
+            select: {
+              id: true,
+              userId: true,
+            },
+          },
         },
       });
 
+      // Calculate priority (repost count will be 0 for new issue)
+      const maxReposts = await getMaxRepostCount(prisma);
+      const repostCount = issue.reposts.length;
+      const priority = calculatePriority(issue.importanceRating, repostCount, maxReposts);
+
       return res.status(201).json({
         message: "Issue created successfully",
-        issue,
+        issue: {
+          ...issue,
+          repostCount,
+          priority,
+        },
       });
     } catch (error) {
       console.error("[Issue] createIssue failed:", error);
@@ -96,16 +125,59 @@ export class IssueController {
               number: true,
             },
           },
+          comments: {
+            include: {
+              admin: {
+                select: {
+                  id: true,
+                  email: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "asc",
+            },
+          },
+          reposts: {
+            select: {
+              id: true,
+              userId: true,
+            },
+          },
         },
         orderBy: {
           [sortBy]: order,
         },
       });
 
+      // Get max repost count for normalization
+      const maxReposts = await getMaxRepostCount(prisma);
+
+      // Calculate priority for each issue
+      const issuesWithPriority = issues.map((issue) => {
+        const repostCount = issue.reposts.length;
+        const priority = calculatePriority(issue.importanceRating, repostCount, maxReposts);
+        
+        return {
+          ...issue,
+          repostCount,
+          priority,
+        };
+      });
+
+      // Sort by priority if requested
+      if (sortBy === "priority") {
+        issuesWithPriority.sort((a, b) => {
+          return order === "desc"
+            ? b.priority.totalPriority - a.priority.totalPriority
+            : a.priority.totalPriority - b.priority.totalPriority;
+        });
+      }
+
       return res.status(200).json({
         message: "Issues retrieved successfully",
-        issues,
-        count: issues.length,
+        issues: issuesWithPriority,
+        count: issuesWithPriority.length,
       });
     } catch (error) {
       console.error("[Issue] getIssues failed:", error);
@@ -126,6 +198,19 @@ export class IssueController {
             select: {
               id: true,
               number: true,
+            },
+          },
+          comments: {
+            include: {
+              admin: {
+                select: {
+                  id: true,
+                  email: true,
+                },
+              },
+            },
+            orderBy: {
+              createdAt: "asc",
             },
           },
         },

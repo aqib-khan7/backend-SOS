@@ -17,8 +17,9 @@ datasource db {
 // this is for the dashboard 
 model Admin {
   id        String   @id @default(uuid())
-  email     String
+  email     String   @unique
   password  String
+  comments  Comment[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -30,6 +31,7 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   issues    Issue[]
+  reposts   Repost[]
 }
 
 // this will be the issue that is being reported by the citizen 
@@ -38,12 +40,14 @@ model Issue {
   title            String
   description     String
   image           String?   // Optional image URL
-  importanceRating Int      @default(0) // 0-5 scale set by citizen
+  importanceRating Int      @default(0) // 0-5 scale set by citizen (for priority calculation)
   status          Int       @default(0) // 0-5 scale set by admin (0=pending, 5=resolved)
   categoryId      String
   category        Category  @relation(fields: [categoryId], references: [id])
   userId          String
   user            User      @relation(fields: [userId], references: [id])
+  comments        Comment[]
+  reposts         Repost[]
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 }
@@ -66,4 +70,32 @@ model PhoneOtp {
   createdAt DateTime @default(now())
 
   @@index([phone, consumed])
+}
+
+// Comments made by admins on issues
+model Comment {
+  id        String   @id @default(uuid())
+  content   String
+  issueId   String
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  adminId   String
+  admin     Admin    @relation(fields: [adminId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([issueId])
+}
+
+// Reposts - when users repost/share an issue (many-to-many relationship)
+model Repost {
+  id        String   @id @default(uuid())
+  issueId   String
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([issueId, userId]) // Prevent duplicate reposts
+  @@index([issueId])
+  @@index([userId])
 }
