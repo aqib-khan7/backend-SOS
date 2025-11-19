@@ -137,11 +137,7 @@ export class CommentController {
         return res.status(404).json({ message: "Comment not found" });
       }
 
-      if (comment.adminId !== adminId) {
-        return res.status(403).json({
-          message: "You can only update your own comments",
-        });
-      }
+      // Note: any authenticated admin may update comments. Ownership check removed.
 
       const updatedComment = await prisma.comment.update({
         where: { id: commentId },
@@ -189,11 +185,7 @@ export class CommentController {
         return res.status(404).json({ message: "Comment not found" });
       }
 
-      if (comment.adminId !== adminId) {
-        return res.status(403).json({
-          message: "You can only delete your own comments",
-        });
-      }
+      // Note: any authenticated admin may delete comments. Ownership check removed.
 
       await prisma.comment.delete({
         where: { id: commentId },
